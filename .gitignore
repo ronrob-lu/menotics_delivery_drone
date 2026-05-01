@@ -1,5 +1,1 @@
-```lua
--- No files need to be ignored based on the provided changes
--- The changes include only source files (.lua) and image assets (.png)
--- which should be tracked in version control
-```
+Nothing needs to be added to .gitignore since only a source file (`init.lua`) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
