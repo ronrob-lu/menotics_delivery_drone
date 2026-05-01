@@ -37,8 +37,8 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                 textures = {
             "menotics-drone.png^[transformFY",
             "menotics-drone.png^[transformFY",
-            "[animate:menotics-drone-top.png,menotics-drone-top-2.png:2",
-            "[animate:menotics-drone-bottom.png,menotics-drone-bottom-2.png:2",
+            "menotics-drone-top-animated.png",
+            "menotics-drone-bottom-animated.png",
             "menotics-drone.png^[transformFY",
             "menotics-drone.png^[transformFY"
         },
@@ -51,7 +51,9 @@ minetest.register_entity("menotics_delivery_drone:drone", {
             range_end = 2,
             frame_speed = 2,
             loop = true
-        }
+        },
+        spritediv = {x=1, y=2},
+        initial_sprite_basepos = {x=0, y=0}
     },
     
     on_activate = function(self, staticdata, dtime_s)
