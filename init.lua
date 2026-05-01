@@ -71,6 +71,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         self.speed = 3
         self.hover_timer = 0
         self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
+        self.current_lamp_pos = nil -- Track which lamp we're currently at
         
         -- Create persistent inventory
         self.inv = minetest.create_detached_inventory(self.inv_name, {
@@ -99,6 +100,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                 end
                 self.state = data.state or "idle"
                 self.wait_timer = data.wait_timer or 0
+                self.current_lamp_pos = data.current_lamp_pos
             end
         end
         
@@ -108,12 +110,33 @@ minetest.register_entity("menotics_delivery_drone:drone", {
     on_rightclick = function(self, clicker)
         if not clicker:is_player() then return end
         
+        local player_name = clicker:get_player_name()
+        
+        -- Ensure inventory exists
+        if not self.inv then
+            self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
+            self.inv = minetest.create_detached_inventory(self.inv_name, {
+                allow_move = function(inv, from_list, from_index, to_list, to_index, count, player)
+                    return count
+                end,
+                allow_put = function(inv, listname, index, stack, player)
+                    return stack:get_count()
+                end,
+                allow_take = function(inv, listname, index, stack, player)
+                    return stack:get_count()
+                end,
+            })
+            self.inv:set_size("main", 32)
+        end
+        
         -- Show the inventory formspec
-        minetest.show_formspec(clicker:get_player_name(), "drone:inv",
-            "size[8,9;]"..
-            "list[detached:"..self.inv_name..";main;0,0;8,4;]"..
-            "list[current_player;main;0,4.5;8,4;]"..
-            "listring[]")
+        local formspec = "size[8,9;]" ..
+            "label[0,-0.2;Drone Inventory]" ..
+            "list[detached:" .. self.inv_name .. ";main;0,0.5;8,4;]" ..
+            "list[current_player;main;0,4.5;8,4;]" ..
+            "listring[]"
+        
+        minetest.show_formspec(player_name, "drone:inv", formspec)
     end,
     
     on_step = function(self, dtime)
@@ -156,26 +179,138 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                 self.state = "waiting"
                 self.wait_timer = 0
                 self.last_lamp = pos
+                self.current_lamp_pos = pos_to_key(self.target) -- Remember which lamp we're at
                 self.object:set_velocity({x=0, y=0, z=0})
                 minetest.chat_send_all("[Drone] Arrived at checkpoint!")
                 return
             end
             
-            local vel = vector.normalize(dir)
+            -- Calculate desired height (above the target lamp)
+            local target_height = self.target.y + 2 -- Hover 2 blocks above the lamp
+            
+            -- Create a target position with the correct height
+            local adjusted_target = {
+                x = self.target.x,
+                y = target_height,
+                z = self.target.z
+            }
+            
+            -- Calculate direction to the adjusted target (at proper height)
+            local dir_to_target = vector.subtract(adjusted_target, pos)
+            local dist_to_target = vector.length(dir_to_target)
+            
+            -- Normalize and scale velocity
+            local vel = vector.normalize(dir_to_target)
             vel = vector.multiply(vel, self.speed)
             
+            -- Add hover effect
             local hover_y = math.sin(self.hover_timer * 3) * 0.3
-            vel.y = hover_y
+            vel.y = vel.y + hover_y
+            
+            -- Raycast to check for obstacles in the path
+            local current_pos = pos
+            local step_size = 1
+            local max_steps = math.ceil(dist_to_target / step_size)
+            local has_obstacle = false
+            local obstacle_pos = nil
+            
+            for i = 1, max_steps do
+                local check_pos = vector.add(current_pos, vector.multiply(vector.normalize(dir_to_target), i * step_size))
+                local node = minetest.get_node(check_pos)
+                if node and not minetest.registered_nodes[node.name] then
+                    has_obstacle = true
+                    obstacle_pos = check_pos
+                    break
+                end
+                -- Check if node is solid
+                local node_def = minetest.registered_nodes[node.name]
+                if node_def and node_def.walkable then
+                    has_obstacle = true
+                    obstacle_pos = check_pos
+                    break
+                end
+            end
+            
+            -- If there's an obstacle, try to go around it by increasing Y
+            if has_obstacle then
+                -- Try to find a clear path by going higher
+                local test_height = target_height + 1
+                while test_height < self.target.y + 20 do
+                    local test_pos = {x = self.target.x, y = test_height, z = self.target.z}
+                    local path_clear = true
+                    
+                    -- Check if this height is clear
+                    for dy = 0, 2 do
+                        local check_pos = {x = self.target.x, y = test_pos.y + dy, z = self.target.z}
+                        local node = minetest.get_node(check_pos)
+                        local node_def = minetest.registered_nodes[node.name]
+                        if node_def and node_def.walkable then
+                            path_clear = false
+                            break
+                        end
+                    end
+                    
+                    if path_clear then
+                        adjusted_target.y = test_height
+                        dir_to_target = vector.subtract(adjusted_target, pos)
+                        vel = vector.normalize(dir_to_target)
+                        vel = vector.multiply(vel, self.speed)
+                        vel.y = vel.y + hover_y
+                        break
+                    end
+                    test_height = test_height + 1
+                end
+            end
             
             self.object:set_velocity(vel)
             
-            local yaw = math.atan2(dir.x, dir.z)
+            local yaw = math.atan2(dir_to_target.x, dir_to_target.z)
             self.object:set_yaw(yaw)
             
         elseif self.state == "waiting" then
-            self.object:set_velocity({x=0, y=0, z=0})
-            local hover_y = math.sin(self.hover_timer * 3) * 0.3
-            self.object:set_velocity({x=0, y=hover_y, z=0})
+            -- Always stay positioned above the current lamp when waiting
+            if self.current_lamp_pos then
+                local lamp_pos = minetest.string_to_pos(self.current_lamp_pos)
+                if lamp_pos then
+                    -- Calculate the ideal hover position (2 blocks above the lamp)
+                    local ideal_pos = {
+                        x = lamp_pos.x,
+                        y = lamp_pos.y + 2,
+                        z = lamp_pos.z
+                    }
+                    
+                    -- Check if we're at the correct position
+                    local dist_from_ideal = vector.distance(pos, ideal_pos)
+                    
+                    -- If we've drifted too far, move back to the ideal position
+                    if dist_from_ideal > 0.5 then
+                        local dir_to_ideal = vector.subtract(ideal_pos, pos)
+                        local vel = vector.normalize(dir_to_ideal)
+                        vel = vector.multiply(vel, self.speed * 0.5) -- Move slower when repositioning
+                        
+                        -- Add small hover effect
+                        local hover_y = math.sin(self.hover_timer * 3) * 0.3
+                        vel.y = vel.y + hover_y
+                        
+                        self.object:set_velocity(vel)
+                        
+                        local yaw = math.atan2(dir_to_ideal.x, dir_to_ideal.z)
+                        self.object:set_yaw(yaw)
+                    else
+                        -- Just hover in place
+                        local hover_y = math.sin(self.hover_timer * 3) * 0.3
+                        self.object:set_velocity({x=0, y=hover_y, z=0})
+                    end
+                else
+                    -- Lamp position lost, just hover
+                    local hover_y = math.sin(self.hover_timer * 3) * 0.3
+                    self.object:set_velocity({x=0, y=hover_y, z=0})
+                end
+            else
+                -- No lamp position tracked, just hover
+                local hover_y = math.sin(self.hover_timer * 3) * 0.3
+                self.object:set_velocity({x=0, y=hover_y, z=0})
+            end
             
             self.wait_timer = self.wait_timer + dtime
             
@@ -218,7 +353,8 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         local data = {
             inv_data = inv_data,
             state = self.state,
-            wait_timer = self.wait_timer
+            wait_timer = self.wait_timer,
+            current_lamp_pos = self.current_lamp_pos
         }
         
         -- Clean up inventory
