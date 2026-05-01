@@ -1,45 +1,5 @@
--- Menotics Delivery Drone Mod
+-- Menotics Delivery Drone Mod - Drone flies between lamps with inventory
 menotics_delivery_drone = {}
-menotics_delivery_drone.lamps = {}
-
-local function pos_to_key(pos)
-    if not pos then return nil end
-    return minetest.pos_to_string(vector.round(pos))
-end
-
-local function count_lamps()
-    local c = 0
-    for _ in pairs(menotics_delivery_drone.lamps) do c = c + 1 end
-    return c
-end
-
-local function find_nearest_lamp(current_pos, exclude_pos_key)
-    local nearest, nearest_dist = nil, math.huge
-    local lamp_positions = {}
-    
-    for lamp_pos_str, _ in pairs(menotics_delivery_drone.lamps) do
-        local lamp_pos = minetest.string_to_pos(lamp_pos_str)
-        if lamp_pos then table.insert(lamp_positions, lamp_pos) end
-    end
-    
-    for _, lamp_pos in ipairs(lamp_positions) do
-        local dist = vector.distance(current_pos, lamp_pos)
-        
-        -- Always skip the lamp we're currently at or very close to
-        if dist > 2 then  -- Must be at least 2 blocks away
-            -- Also skip the previous lamp if we have more than 2 lamps
-            if exclude_pos_key and count_lamps() > 2 then
-                if lamp_pos_str == exclude_pos_key then goto continue end
-            end
-            
-            if dist < nearest_dist then
-                nearest, nearest_dist = lamp_pos, dist
-            end
-        end
-        ::continue::
-    end
-    return nearest
-end
 
 local function get_sounds()
     local def = rawget(_G, "default")
@@ -47,6 +7,24 @@ local function get_sounds()
         return def.node_sound_wood_defaults()
     end
     return nil
+end
+
+-- Helper function to find all lamps in the world
+local function find_all_lamps()
+    local lamps = {}
+    local entities = minetest.get_objects_inside_radius({x=0, y=0, z=0}, 99999)
+    
+    for _, obj in ipairs(entities) do
+        local luaentity = obj:get_luaentity()
+        if luaentity and luaentity.name == "menotics_delivery_drone:lamp" then
+            local pos = obj:get_pos()
+            if pos then
+                table.insert(lamps, {object=obj, pos=pos, entity=luaentity})
+            end
+        end
+    end
+    
+    return lamps
 end
 
 -- REGISTER DRONE ENTITY
@@ -64,13 +42,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
     },
     
     on_activate = function(self, staticdata, dtime_s)
-        self.state = "idle"
-        self.wait_timer = 0
-        self.target = nil
-        self.speed = 3
-        self.hover_timer = 0
         self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
-        self.current_lamp_pos = nil -- Track which lamp we're currently at
         
         -- Create persistent inventory
         self.inv = minetest.create_detached_inventory(self.inv_name, {
@@ -86,6 +58,14 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         })
         self.inv:set_size("main", 32)
         
+        -- Initialize state
+        self.state = "idle"  -- idle, moving, waiting
+        self.target_pos = nil
+        self.current_lamp = nil
+        self.previous_lamp = nil
+        self.wait_timer = 0
+        self.move_timer = 0
+        
         -- Load saved data
         if staticdata and staticdata ~= "" then
             local data = minetest.deserialize(staticdata)
@@ -97,13 +77,19 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                         end
                     end
                 end
-                self.state = data.state or "idle"
-                self.wait_timer = data.wait_timer or 0
-                self.current_lamp_pos = data.current_lamp_pos
+                if data.current_lamp then
+                    self.current_lamp = data.current_lamp
+                end
+                if data.previous_lamp then
+                    self.previous_lamp = data.previous_lamp
+                end
             end
         end
         
-        minetest.chat_send_all("[Drone] Activated. Lamps: " .. count_lamps())
+        -- Set infotext
+        self.object:set_properties({
+            infotext = "Menotics Delivery Drone\nFlying between lamps\nRight-click to access inventory"
+        })
     end,
     
     on_rightclick = function(self, clicker)
@@ -111,7 +97,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         
         local player_name = clicker:get_player_name()
         
-        -- Ensure inventory exists and is properly linked
+        -- Ensure inventory exists
         if not self.inv or not self.inv_name then
             self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
             self.inv = minetest.create_detached_inventory(self.inv_name, {
@@ -143,7 +129,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         
         -- Show the inventory formspec
         local formspec = "size[8,9;]" ..
-            "label[0,-0.2;Drone Inventory]" ..
+            "label[0,-0.2;Drone Storage]" ..
             "list[detached:" .. self.inv_name .. ";main;0,0.5;8,4;]" ..
             "list[current_player;main;0,4.5;8,4;]" ..
             "listring[]"
@@ -155,179 +141,114 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         local pos = self.object:get_pos()
         if not pos then return end
         
-        self.hover_timer = self.hover_timer + dtime
+        local lamps = find_all_lamps()
         
-        -- Update status text
-        local status_text = "Menotics Delivery Drone\n[" .. self.state:upper() .. "] Lamps: " .. count_lamps()
-        if self.state == "waiting" then
-            status_text = status_text .. "\nWaiting: " .. math.ceil(20 - self.wait_timer) .. "s"
-        elseif self.state == "moving" and self.target then
-            local dist = vector.distance(pos, self.target)
-            status_text = status_text .. "\nDistance: " .. math.floor(dist) .. "m"
+        -- If no lamps, just hover in place
+        if #lamps == 0 then
+            local hover_y = math.sin(minetest.get_us_time() / 500000) * 0.3
+            self.object:set_velocity({x=0, y=hover_y, z=0})
+            return
         end
-        self.object:set_properties({infotext = status_text})
         
-        if self.state == "idle" then
-            self.object:set_velocity({x=0, y=0, z=0})
-            self.target = find_nearest_lamp(pos, self.current_lamp_pos)
+        -- State machine
+        if self.state == "idle" or self.state == "waiting" then
+            self.wait_timer = self.wait_timer + dtime
             
-            if self.target then
-                minetest.chat_send_all("[Drone] Flying to " .. minetest.pos_to_string(self.target))
-                self.state = "moving"
-            else
-                minetest.chat_send_all("[Drone] No lamps found to fly to!")
-            end
-            
-        elseif self.state == "moving" then
-            if not self.target then
-                self.state = "idle"
-                return
-            end
-            
-            local dir = vector.subtract(self.target, pos)
-            local dist = vector.length(dir)
-            
-            if dist < 1.5 then
-                self.state = "waiting"
+            -- Wait 20 seconds before moving to next lamp
+            if self.wait_timer >= 20 then
                 self.wait_timer = 0
-                self.current_lamp_pos = pos_to_key(self.target) -- Remember which lamp we're at
-                self.object:set_velocity({x=0, y=0, z=0})
-                minetest.chat_send_all("[Drone] Arrived at checkpoint!")
-                return
-            end
-            
-            -- Calculate desired height (above the target lamp)
-            local target_height = self.target.y + 2 -- Hover 2 blocks above the lamp
-            
-            -- Create a target position with the correct height
-            local adjusted_target = {
-                x = self.target.x,
-                y = target_height,
-                z = self.target.z
-            }
-            
-            -- Calculate direction to the adjusted target (at proper height)
-            local dir_to_target = vector.subtract(adjusted_target, pos)
-            local dist_to_target = vector.length(dir_to_target)
-            
-            -- Normalize and scale velocity
-            local vel = vector.normalize(dir_to_target)
-            vel = vector.multiply(vel, self.speed)
-            
-            -- Add hover effect
-            local hover_y = math.sin(self.hover_timer * 3) * 0.3
-            vel.y = vel.y + hover_y
-            
-            -- Raycast to check for obstacles in the path
-            local current_pos = pos
-            local step_size = 1
-            local max_steps = math.ceil(dist_to_target / step_size)
-            local has_obstacle = false
-            local obstacle_pos = nil
-            
-            for i = 1, max_steps do
-                local check_pos = vector.add(current_pos, vector.multiply(vector.normalize(dir_to_target), i * step_size))
-                local node = minetest.get_node(check_pos)
-                if node and not minetest.registered_nodes[node.name] then
-                    has_obstacle = true
-                    obstacle_pos = check_pos
-                    break
-                end
-                -- Check if node is solid
-                local node_def = minetest.registered_nodes[node.name]
-                if node_def and node_def.walkable then
-                    has_obstacle = true
-                    obstacle_pos = check_pos
-                    break
-                end
-            end
-            
-            -- If there's an obstacle, try to go around it by increasing Y
-            if has_obstacle then
-                -- Try to find a clear path by going higher
-                local test_height = target_height + 1
-                while test_height < self.target.y + 20 do
-                    local test_pos = {x = self.target.x, y = test_height, z = self.target.z}
-                    local path_clear = true
-                    
-                    -- Check if this height is clear
-                    for dy = 0, 2 do
-                        local check_pos = {x = self.target.x, y = test_pos.y + dy, z = self.target.z}
-                        local node = minetest.get_node(check_pos)
-                        local node_def = minetest.registered_nodes[node.name]
-                        if node_def and node_def.walkable then
-                            path_clear = false
-                            break
+                self.state = "moving"
+                
+                -- Find next lamp (not the previous one unless only 2 lamps)
+                local next_lamp = nil
+                local available_lamps = {}
+                
+                for _, lamp in ipairs(lamps) do
+                    -- Skip the current lamp
+                    if lamp.object ~= self.current_lamp then
+                        -- Skip the previous lamp unless there are only 2 lamps total
+                        if #lamps > 2 and lamp.object == self.previous_lamp then
+                            -- Skip previous lamp when more than 2 lamps exist
+                        else
+                            table.insert(available_lamps, lamp)
                         end
                     end
-                    
-                    if path_clear then
-                        adjusted_target.y = test_height
-                        dir_to_target = vector.subtract(adjusted_target, pos)
-                        vel = vector.normalize(dir_to_target)
-                        vel = vector.multiply(vel, self.speed)
-                        vel.y = vel.y + hover_y
-                        break
-                    end
-                    test_height = test_height + 1
                 end
-            end
-            
-            self.object:set_velocity(vel)
-            
-            local yaw = math.atan2(dir_to_target.x, dir_to_target.z)
-            self.object:set_yaw(yaw)
-            
-        elseif self.state == "waiting" then
-            -- Always stay positioned above the current lamp when waiting
-            if self.current_lamp_pos then
-                local lamp_pos = minetest.string_to_pos(self.current_lamp_pos)
-                if lamp_pos then
-                    -- Calculate the ideal hover position (2 blocks above the lamp)
-                    local ideal_pos = {
-                        x = lamp_pos.x,
-                        y = lamp_pos.y + 2,
-                        z = lamp_pos.z
-                    }
+                
+                -- If no available lamps (shouldn't happen), use any lamp except current
+                if #available_lamps == 0 then
+                    for _, lamp in ipairs(lamps) do
+                        if lamp.object ~= self.current_lamp then
+                            table.insert(available_lamps, lamp)
+                        end
+                    end
+                end
+                
+                -- Pick a random lamp from available
+                if #available_lamps > 0 then
+                    local idx = math.random(1, #available_lamps)
+                    next_lamp = available_lamps[idx]
+                end
+                
+                if next_lamp then
+                    self.previous_lamp = self.current_lamp
+                    self.current_lamp = next_lamp.object
+                    self.target_pos = next_lamp.pos
+                    self.move_timer = 0
                     
-                    -- Check if we're at the correct position
-                    local dist_from_ideal = vector.distance(pos, ideal_pos)
+                    -- Start moving towards target
+                    local dx = self.target_pos.x - pos.x
+                    local dy = self.target_pos.y - pos.y
+                    local dz = self.target_pos.z - pos.z
+                    local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
                     
-                    -- If we've drifted too far, move back to the ideal position
-                    if dist_from_ideal > 0.5 then
-                        local dir_to_ideal = vector.subtract(ideal_pos, pos)
-                        local vel = vector.normalize(dir_to_ideal)
-                        vel = vector.multiply(vel, self.speed * 0.5) -- Move slower when repositioning
-                        
-                        -- Add small hover effect
-                        local hover_y = math.sin(self.hover_timer * 3) * 0.3
-                        vel.y = vel.y + hover_y
-                        
-                        self.object:set_velocity(vel)
-                        
-                        local yaw = math.atan2(dir_to_ideal.x, dir_to_ideal.z)
-                        self.object:set_yaw(yaw)
+                    if dist > 0.5 then
+                        local speed = 5
+                        self.velocity = {
+                            x = (dx / dist) * speed,
+                            y = (dy / dist) * speed,
+                            z = (dz / dist) * speed
+                        }
                     else
-                        -- Just hover in place
-                        local hover_y = math.sin(self.hover_timer * 3) * 0.3
-                        self.object:set_velocity({x=0, y=hover_y, z=0})
+                        self.velocity = {x=0, y=0, z=0}
+                        self.state = "waiting"
                     end
                 else
-                    -- Lamp position lost, just hover
-                    local hover_y = math.sin(self.hover_timer * 3) * 0.3
-                    self.object:set_velocity({x=0, y=hover_y, z=0})
+                    self.state = "waiting"
+                    self.velocity = {x=0, y=0, z=0}
                 end
             else
-                -- No lamp position tracked, just hover
-                local hover_y = math.sin(self.hover_timer * 3) * 0.3
+                -- Hover while waiting
+                local hover_y = math.sin(minetest.get_us_time() / 500000) * 0.3
                 self.object:set_velocity({x=0, y=hover_y, z=0})
             end
             
-            self.wait_timer = self.wait_timer + dtime
-            
-            if self.wait_timer >= 20 then
-                self.state = "idle"
-                minetest.chat_send_all("[Drone] Resuming delivery route...")
+        elseif self.state == "moving" then
+            if self.target_pos then
+                local dx = self.target_pos.x - pos.x
+                local dy = self.target_pos.y - pos.y
+                local dz = self.target_pos.z - pos.z
+                local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                
+                if dist < 0.5 then
+                    -- Arrived at lamp
+                    self.velocity = {x=0, y=0, z=0}
+                    self.state = "waiting"
+                    self.wait_timer = 0
+                else
+                    -- Continue moving
+                    local speed = 5
+                    self.velocity = {
+                        x = (dx / dist) * speed,
+                        y = (dy / dist) * speed,
+                        z = (dz / dist) * speed
+                    }
+                end
+                
+                self.object:set_velocity(self.velocity)
+            else
+                self.state = "waiting"
+                self.wait_timer = 0
             end
         end
     end,
@@ -352,7 +273,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
     end,
     
     get_staticdata = function(self)
-        -- Save inventory items
+        -- Save inventory items and state
         local inv_data = {}
         for i=1, 32 do
             local stack = self.inv:get_stack("main", i)
@@ -361,15 +282,21 @@ minetest.register_entity("menotics_delivery_drone:drone", {
             end
         end
         
+        local current_lamp_id = nil
+        if self.current_lamp then
+            current_lamp_id = tostring(self.current_lamp):gsub("[^%w]", "")
+        end
+        
+        local previous_lamp_id = nil
+        if self.previous_lamp then
+            previous_lamp_id = tostring(self.previous_lamp):gsub("[^%w]", "")
+        end
+        
         local data = {
             inv_data = inv_data,
-            state = self.state,
-            wait_timer = self.wait_timer,
-            current_lamp_pos = self.current_lamp_pos
+            current_lamp = current_lamp_id,
+            previous_lamp = previous_lamp_id
         }
-        
-        -- Clean up inventory
-        minetest.remove_detached_inventory(self.inv_name)
         
         return minetest.serialize(data)
     end,
@@ -381,22 +308,27 @@ minetest.register_entity("menotics_delivery_drone:drone", {
     end,
 })
 
--- REGISTER LAMP NODE
-minetest.register_node("menotics_delivery_drone:lamp", {
-    description = "Menotics Mese Lamp",
-    tiles = {"default_mese_block.png"},
-    groups = {snappy=2, choppy=2, oddly_breakable_by_hand=2},
-    light_source = 7,
-    sounds = get_sounds(),
+-- REGISTER LAMP ENTITY (waypoint for drones)
+minetest.register_entity("menotics_delivery_drone:lamp", {
+    initial_properties = {
+        hp_max = 10,
+        physical = false,
+        collisionbox = {-0.3, 0, -0.3, 0.3, 0.8, 0.3},
+        visual = "cube",
+        textures = {"default_lamp.png", "default_lamp.png", "default_lamp.png", "default_lamp.png", "default_lamp.png", "default_lamp.png"},
+        visual_size = {x=1, y=1},
+        glow = 8,
+        gravity = 0,
+    },
     
-    on_construct = function(pos)
-        menotics_delivery_drone.lamps[pos_to_key(pos)] = true
-        minetest.chat_send_all("[Drone] Lamp placed (Total: " .. count_lamps() .. ")")
+    on_activate = function(self, staticdata, dtime_s)
+        self.object:set_properties({
+            infotext = "Delivery Lamp\nDrone waypoint"
+        })
     end,
     
-    on_destruct = function(pos)
-        menotics_delivery_drone.lamps[pos_to_key(pos)] = nil
-        minetest.chat_send_all("[Drone] Lamp removed (Total: " .. count_lamps() .. ")")
+    on_step = function(self, dtime)
+        -- Lamp stays stationary, just glows
     end,
 })
 
@@ -420,6 +352,24 @@ minetest.register_craftitem("menotics_delivery_drone:drone_item", {
     end,
 })
 
+-- REGISTER LAMP ITEM
+minetest.register_craftitem("menotics_delivery_drone:lamp_item", {
+    description = "Delivery Lamp\nDrone waypoint\nRight-click to place",
+    inventory_image = "default_lamp.png",
+    
+    on_place = function(itemstack, placer, pointed_thing)
+        if not pointed_thing then return itemstack end
+        
+        local pos = pointed_thing.above
+        if not pos then return itemstack end
+        
+        minetest.add_entity(pos, "menotics_delivery_drone:lamp")
+        itemstack:take_item()
+        minetest.chat_send_all("[Lamp] Placed!")
+        return itemstack
+    end,
+})
+
 -- RECIPES
 minetest.register_craft({
     output = "menotics_delivery_drone:drone_item",
@@ -431,10 +381,9 @@ minetest.register_craft({
 })
 
 minetest.register_craft({
-    output = "menotics_delivery_drone:lamp",
+    output = "menotics_delivery_drone:lamp_item 2",
     recipe = {
-        {"default:glass", "default:glass", "default:glass"},
-        {"default:glass", "default:mese_crystal", "default:glass"},
+        {"default:glass", "default:torch", "default:glass"},
         {"default:steel_ingot", "default:steel_ingot", "default:steel_ingot"},
     }
 })
