@@ -72,6 +72,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         self.previous_lamp = nil
         self.wait_timer = 0
         self.move_timer = 0
+        self.sound_handle = nil
         
         -- Load saved data
         if staticdata and staticdata ~= "" then
@@ -239,11 +240,27 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                 local dz = self.target_pos.z - pos.z
                 local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
                 
+                -- Play sound when flying
+                if not self.sound_handle then
+                    self.sound_handle = minetest.sound_play("propeller_cartoon_loop", {
+                        object = self.object,
+                        gain = 0.5,
+                        max_hear_distance = 32,
+                        loop = true
+                    })
+                end
+                
                 if dist < 1.5 then
                     -- Arrived at lamp (stop further away to avoid collision)
                     self.velocity = {x=0, y=0, z=0}
                     self.state = "waiting"
                     self.wait_timer = 0
+                    
+                    -- Stop sound when arrived
+                    if self.sound_handle then
+                        minetest.sound_stop(self.sound_handle)
+                        self.sound_handle = nil
+                    end
                 else
                     -- Continue moving
                     local speed = 5
@@ -258,12 +275,24 @@ minetest.register_entity("menotics_delivery_drone:drone", {
             else
                 self.state = "waiting"
                 self.wait_timer = 0
+                
+                -- Stop sound if no target
+                if self.sound_handle then
+                    minetest.sound_stop(self.sound_handle)
+                    self.sound_handle = nil
+                end
             end
         end
     end,
     
     on_punch = function(self, puncher)
         if puncher and puncher:is_player() then
+            -- Stop sound before removing
+            if self.sound_handle then
+                minetest.sound_stop(self.sound_handle)
+                self.sound_handle = nil
+            end
+            
             -- Drop all items from inventory
             local drop_pos = self.object:get_pos()
             drop_pos.y = drop_pos.y + 1
@@ -312,6 +341,11 @@ minetest.register_entity("menotics_delivery_drone:drone", {
     
     on_deactivate = function(self, removal)
         if removal then
+            -- Stop sound on deactivation
+            if self.sound_handle then
+                minetest.sound_stop(self.sound_handle)
+                self.sound_handle = nil
+            end
             minetest.remove_detached_inventory(self.inv_name)
         end
     end,
