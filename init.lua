@@ -129,11 +129,10 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         
         -- Show the inventory formspec with visual separation
         local formspec = "size[8,9;]" ..
-            "background[0,0;8,4.5;menotics.png;base_color=true]" ..
-            "label[0,-0.2;Drone Storage]" ..
+            "label[0.2,0.2;Drone Storage]" ..
             "list[detached:" .. self.inv_name .. ";main;0,0.5;8,4;]" ..
             "box[0,4.3;8,0.1;#666666]" ..
-            "label[0,4.4;Player Inventory]" ..
+            "label[0.2,4.5;Player Inventory]" ..
             "list[current_player;main;0,4.7;8,4;]" ..
             "listring[]"
         
@@ -205,7 +204,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                     local dz = self.target_pos.z - pos.z
                     local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
                     
-                    if dist > 0.5 then
+                    if dist > 1.5 then
                         local speed = 5
                         self.velocity = {
                             x = (dx / dist) * speed,
@@ -233,8 +232,8 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                 local dz = self.target_pos.z - pos.z
                 local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
                 
-                if dist < 0.5 then
-                    -- Arrived at lamp
+                if dist < 1.5 then
+                    -- Arrived at lamp (stop further away to avoid collision)
                     self.velocity = {x=0, y=0, z=0}
                     self.state = "waiting"
                     self.wait_timer = 0
