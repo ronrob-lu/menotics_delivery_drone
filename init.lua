@@ -34,7 +34,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         physical = false,
         collisionbox = {-0.3, -0.3, -0.3, 0.3, 0.3, 0.3},
         visual = "cube",
-                textures = {
+        textures = {
             "menotics-drone.png^[transformFY",
             "menotics-drone.png^[transformFY",
             "menotics-drone-top-animated.png",
@@ -47,8 +47,8 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         automatic_rotate = 0,
         gravity = 0,
         animation = {
-            range_start = 1,
-            range_end = 2,
+            range_start = 0,
+            range_end = 1,
             frame_speed = 2,
             loop = true
         },
