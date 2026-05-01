@@ -127,11 +127,14 @@ minetest.register_entity("menotics_delivery_drone:drone", {
             end
         end
         
-        -- Show the inventory formspec
+        -- Show the inventory formspec with visual separation
         local formspec = "size[8,9;]" ..
+            "background[0,0;8,4.5;menotics.png;base_color=true]" ..
             "label[0,-0.2;Drone Storage]" ..
             "list[detached:" .. self.inv_name .. ";main;0,0.5;8,4;]" ..
-            "list[current_player;main;0,4.5;8,4;]" ..
+            "box[0,4.3;8,0.1;#666666]" ..
+            "label[0,4.4;Player Inventory]" ..
+            "list[current_player;main;0,4.7;8,4;]" ..
             "listring[]"
         
         minetest.show_formspec(player_name, "drone:inv", formspec)
