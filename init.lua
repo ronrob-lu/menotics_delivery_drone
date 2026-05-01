@@ -110,12 +110,33 @@ minetest.register_entity("menotics_delivery_drone:drone", {
     on_rightclick = function(self, clicker)
         if not clicker:is_player() then return end
         
+        local player_name = clicker:get_player_name()
+        
+        -- Ensure inventory exists
+        if not self.inv then
+            self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
+            self.inv = minetest.create_detached_inventory(self.inv_name, {
+                allow_move = function(inv, from_list, from_index, to_list, to_index, count, player)
+                    return count
+                end,
+                allow_put = function(inv, listname, index, stack, player)
+                    return stack:get_count()
+                end,
+                allow_take = function(inv, listname, index, stack, player)
+                    return stack:get_count()
+                end,
+            })
+            self.inv:set_size("main", 32)
+        end
+        
         -- Show the inventory formspec
-        minetest.show_formspec(clicker:get_player_name(), "drone:inv",
-            "size[8,9;]"..
-            "list[detached:"..self.inv_name..";main;0,0;8,4;]"..
-            "list[current_player;main;0,4.5;8,4;]"..
-            "listring[]")
+        local formspec = "size[8,9;]" ..
+            "label[0,-0.2;Drone Inventory]" ..
+            "list[detached:" .. self.inv_name .. ";main;0,0.5;8,4;]" ..
+            "list[current_player;main;0,4.5;8,4;]" ..
+            "listring[]"
+        
+        minetest.show_formspec(player_name, "drone:inv", formspec)
     end,
     
     on_step = function(self, dtime)
