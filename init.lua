@@ -13,7 +13,7 @@ local function count_lamps()
     return c
 end
 
-local function find_nearest_lamp(current_pos, exclude_pos)
+local function find_nearest_lamp(current_pos, exclude_pos_key)
     local nearest, nearest_dist = nil, math.huge
     local lamp_positions = {}
     
@@ -28,8 +28,8 @@ local function find_nearest_lamp(current_pos, exclude_pos)
         -- Always skip the lamp we're currently at or very close to
         if dist > 2 then  -- Must be at least 2 blocks away
             -- Also skip the previous lamp if we have more than 2 lamps
-            if exclude_pos and count_lamps() > 2 then
-                if vector.equals(lamp_pos, exclude_pos) then goto continue end
+            if exclude_pos_key and count_lamps() > 2 then
+                if lamp_pos_str == exclude_pos_key then goto continue end
             end
             
             if dist < nearest_dist then
@@ -67,7 +67,6 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         self.state = "idle"
         self.wait_timer = 0
         self.target = nil
-        self.last_lamp = nil
         self.speed = 3
         self.hover_timer = 0
         self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
@@ -112,8 +111,8 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         
         local player_name = clicker:get_player_name()
         
-        -- Ensure inventory exists
-        if not self.inv then
+        -- Ensure inventory exists and is properly linked
+        if not self.inv or not self.inv_name then
             self.inv_name = "drone_" .. tostring(self.object):gsub("[^%w]", "")
             self.inv = minetest.create_detached_inventory(self.inv_name, {
                 allow_move = function(inv, from_list, from_index, to_list, to_index, count, player)
@@ -127,6 +126,19 @@ minetest.register_entity("menotics_delivery_drone:drone", {
                 end,
             })
             self.inv:set_size("main", 32)
+            
+            -- Reload saved inventory data if available
+            local staticdata = self.object:get_staticdata()
+            if staticdata and staticdata ~= "" then
+                local data = minetest.deserialize(staticdata)
+                if data and data.inv_data then
+                    for i=1, 32 do
+                        if data.inv_data[i] then
+                            self.inv:set_stack("main", i, ItemStack(data.inv_data[i]))
+                        end
+                    end
+                end
+            end
         end
         
         -- Show the inventory formspec
@@ -157,7 +169,7 @@ minetest.register_entity("menotics_delivery_drone:drone", {
         
         if self.state == "idle" then
             self.object:set_velocity({x=0, y=0, z=0})
-            self.target = find_nearest_lamp(pos, self.last_lamp)
+            self.target = find_nearest_lamp(pos, self.current_lamp_pos)
             
             if self.target then
                 minetest.chat_send_all("[Drone] Flying to " .. minetest.pos_to_string(self.target))
@@ -178,7 +190,6 @@ minetest.register_entity("menotics_delivery_drone:drone", {
             if dist < 1.5 then
                 self.state = "waiting"
                 self.wait_timer = 0
-                self.last_lamp = pos
                 self.current_lamp_pos = pos_to_key(self.target) -- Remember which lamp we're at
                 self.object:set_velocity({x=0, y=0, z=0})
                 minetest.chat_send_all("[Drone] Arrived at checkpoint!")
