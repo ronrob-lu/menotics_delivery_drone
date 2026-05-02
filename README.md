@@ -6,9 +6,7 @@ A Minetest mod that adds autonomous delivery drones that navigate between mese l
 
 - **Autonomous Navigation**: Drones automatically fly between placed mese lamps in a patrol pattern
 - **Persistent Inventory**: 32-slot inventory that saves items even when the drone is deactivated
-- **Obstacle Avoidance**: Smart pathfinding that detects and avoids obstacles by adjusting altitude
 - **Hover Effect**: Smooth hovering animation when waiting at lamp positions
-- **Status Display**: Real-time status information showing current state and distance to target
 
 ## Requirements
 
@@ -47,11 +45,13 @@ Use the `menotics_delivery_drone:drone_item` to place a drone in the world. Righ
 - **Right-click**: Open the drone's inventory to load/unload items
 - **Punch**: Remove the drone (all items will be dropped)
 - **Automatic Operation**: Once placed, the drone will automatically:
-  1. Find the nearest lamp
-  2. Fly to it while avoiding obstacles
-  3. Wait for 20 seconds
-  4. Move to the next nearest lamp
-  5. Repeat the cycle
+  1. Scan for all lamps within range
+  2. Skip current and previously visited lamp (when more than 2 exist)
+  3. Randomly select a target lamp
+  4. Fly to it at 5 nodes/second
+  5. Wait for 20 seconds upon arrival (within 1.5 nodes)
+  6. Move to the next lamp
+  7. Repeat the cycle
 
 ### Drone States
 
@@ -64,9 +64,10 @@ Use the `menotics_delivery_drone:drone_item` to place a drone in the world. Righ
 ### Entity Properties
 
 - **Health**: 10 HP
-- **Speed**: 3 nodes/second
-- **Collision Box**: 0.6 × 0.6 × 0.6 nodes
+- **Speed**: 5 nodes/second
+- **Collision Box**: -0.3 to 0.3 on all axes (0.6 × 0.6 × 0.6 nodes)
 - **Visual**: Textured cube using `menotics.png`
+- **Arrival Threshold**: 1.5 nodes from target lamp
 
 ### Inventory System
 
@@ -77,12 +78,12 @@ The drone uses a detached inventory system that persists across activations:
 
 ### Navigation Algorithm
 
-1. Calculates distances to all registered lamps
-2. Skips the current lamp and recently visited lamps
-3. Selects the nearest valid target (>2 nodes away)
-4. Uses raycasting to detect obstacles
-5. Adjusts altitude to clear obstacles when necessary
-6. Maintains a hover position 2 nodes above each lamp
+1. Scans for all lamp entities within a 99,999 node radius
+2. Skips the current lamp and previously visited lamp (when more than 2 lamps exist)
+3. Randomly selects from available lamps
+4. Moves toward target at 5 nodes/second
+5. Considers arrival when within 1.5 nodes of the target lamp
+6. Waits 20 seconds at each lamp before proceeding to the next
 
 ## File Structure
 
@@ -117,8 +118,7 @@ The mod provides feedback through chat messages:
 
 **Drone not moving:**
 - Ensure at least 2 lamps are placed
-- Check that lamps are more than 2 nodes apart
-- Verify no obstacles are blocking the path
+- Verify the drone can detect lamps within range
 
 **Inventory not saving:**
 - This should work automatically; items persist through deactivation
@@ -127,7 +127,6 @@ The mod provides feedback through chat messages:
 **Drone stuck:**
 - Punch and respawn the drone
 - Add more lamps to provide alternative routes
-- Clear obstacles between lamps
 
 ## License
 
@@ -135,4 +134,4 @@ This mod is provided as-is for educational and entertainment purposes.
 
 ## Credits
 
-Created for the Menotics Delivery Drone challenge in Minetest.
+Created for autonomous delivery drone navigation in Minetest.
